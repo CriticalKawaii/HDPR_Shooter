@@ -84,7 +84,7 @@ MonoBehaviour:
     m_Value: 64
   m_VolumetricFogBudget:
     m_OverrideState: 1
-    m_Value: 0.5
+    m_Value: 0.25
   m_ResolutionDepthRatio:
     m_OverrideState: 1
     m_Value: 0.5
@@ -231,7 +231,7 @@ MonoBehaviour:
     m_Value: 0
   m_RayMaxIterations:
     m_OverrideState: 1
-    m_Value: 32
+    m_Value: 16
   rayMiss:
     m_OverrideState: 0
     m_Value: 3
@@ -370,6 +370,7 @@ MonoBehaviour:
   - {fileID: -5564465641910855833}
   - {fileID: 4411376320295789773}
   - {fileID: 411349929762356178}
+  - {fileID: 4127118825817790587}
 --- !u!114 &411349929762356178
 MonoBehaviour:
   m_ObjectHideFlags: 3
@@ -540,6 +541,73 @@ MonoBehaviour:
   fogType:
     m_OverrideState: 0
     m_Value: 0
+--- !u!114 &4127118825817790587
+MonoBehaviour:
+  m_ObjectHideFlags: 3
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: aaa3b8214f75b354e9ba2caadd022259, type: 3}
+  m_Name: DepthOfField
+  m_EditorClassIdentifier: Unity.RenderPipelines.HighDefinition.Runtime::UnityEngine.Rendering.HighDefinition.DepthOfField
+  active: 0
+  quality:
+    m_OverrideState: 0
+    m_Value: 1
+  focusMode:
+    m_OverrideState: 1
+    m_Value: 1
+  focusDistance:
+    m_OverrideState: 0
+    m_Value: 1
+  focusDistanceMode:
+    m_OverrideState: 1
+    m_Value: 0
+  nearFocusStart:
+    m_OverrideState: 0
+    m_Value: 0
+  nearFocusEnd:
+    m_OverrideState: 0
+    m_Value: 4
+  farFocusStart:
+    m_OverrideState: 0
+    m_Value: 10
+  farFocusEnd:
+    m_OverrideState: 0
+    m_Value: 20
+  m_NearSampleCount:
+    m_OverrideState: 0
+    m_Value: 4
+  m_NearMaxBlur:
+    m_OverrideState: 0
+    m_Value: 3
+  m_FarSampleCount:
+    m_OverrideState: 0
+    m_Value: 5
+  m_FarMaxBlur:
+    m_OverrideState: 0
+    m_Value: 6
+  m_Resolution:
+    m_OverrideState: 0
+    m_Value: 4
+  m_HighQualityFiltering:
+    m_OverrideState: 0
+    m_Value: 1
+  m_PhysicallyBased:
+    m_OverrideState: 0
+    m_Value: 0
+  m_AdaptiveSamplingWeight:
+    m_OverrideState: 0
+    m_Value: 0.75
+  m_LimitManualRangeNearBlur:
+    m_OverrideState: 0
+    m_Value: 0
+  coCStabilization:
+    m_OverrideState: 0
+    m_Value: 1
 --- !u!114 &4411376320295789773
 MonoBehaviour:
   m_ObjectHideFlags: 3
@@ -596,19 +664,19 @@ MonoBehaviour:
     m_Value: 1
   m_StepCount:
     m_OverrideState: 1
-    m_Value: 6
+    m_Value: 4
   m_FullResolution:
     m_OverrideState: 1
     m_Value: 0
   m_MaximumRadiusInPixels:
     m_OverrideState: 1
-    m_Value: 40
+    m_Value: 32
   m_BilateralUpsample:
     m_OverrideState: 1
-    m_Value: 1
+    m_Value: 0
   m_DirectionCount:
     m_OverrideState: 1
-    m_Value: 2
+    m_Value: 1
   m_RayLength:
     m_OverrideState: 1
     m_Value: 3
@@ -697,7 +765,7 @@ MonoBehaviour:
     m_Value: 0.15
   m_SampleCount:
     m_OverrideState: 1
-    m_Value: 10
+    m_Value: 6
 --- !u!114 &7875841567784318509
 MonoBehaviour:
   m_ObjectHideFlags: 3
