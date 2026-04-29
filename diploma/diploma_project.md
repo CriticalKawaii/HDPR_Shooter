@@ -516,4 +516,338 @@ HDRP-профиль сцены выбирается из трёх заготов
 
 **Вывод по разделу.** Сцена `ShootingRange` спроектирована с применением двух запечённых лайтмапов, Reflection Probe и HDRP Global Volume с пятью эффектами пост-обработки, что обеспечивает визуальное качество, сопоставимое с требованиями НФТ-03. Рабочий процесс Студента 2 (Blender → UV-развёртка → GIMP Mask Map → HDRP-материал) реализует полный цикл создания PBR-ассетов для HDRP.
 
+### 2.2. Реализация системы оружия
+
+В проекте реализовано два вида оружия — штурмовая винтовка и пистолет. Каждое оружие представлено набором взаимодействующих компонентов. Раздел описывает реализацию всех подсистем на примере штурмовой винтовки с указанием отличий для пистолета.
+
+**2.2.1. Конфигурация оружия (ScriptableObject)**
+
+Параметры оружия вынесены в ScriptableObject-актив `WeaponConfig`. Это позволяет изменять характеристики без редактирования кода и использовать один класс для любого количества видов оружия.
+
+Листинг 1 — WeaponConfig.cs (фрагмент)
+
+```csharp
+[CreateAssetMenu(fileName = "WeaponConfig", menuName = "Weapons/Config")]
+public class WeaponConfig : ScriptableObject
+{
+    [Header("Стрельба")]
+    public FireMode fireMode = FireMode.Auto;
+    public float fireRate  = 10f;
+    public float range     = 100f;
+    public int   magazineCapacity = 30;
+
+    [Header("Отдача")]
+    public float recoilBack        = 0.06f;
+    public float recoilUp          = 0.025f;
+    public float recoilReturnSpeed = 10f;
+    public float recoilKickSpeed   = 20f;
+
+    [Header("Затвор")]
+    public bool    hasBolt = true;
+    public Vector3 boltClosedLocalPosition;
+
+    [Header("Гильзы")]
+    public Vector3 casingEjectDirection = new Vector3(-1f, 1f, 0f);
+    public float   casingForce    = 10f;
+    public float   casingLifetime = 60f;
+}
+
+public enum FireMode { Single, Auto, Burst }
+public enum WeaponType { Pistol, Rifle, SMG, Shotgun, Sniper, MG }
+```
+
+Новый вид оружия добавляется через меню редактора `Assets → Create → Weapons → Config` без изменения какого-либо скрипта.
+
+**2.2.2. Система стрельбы**
+
+Стрельба реализована методом хитскан (hitscan): при нажатии триггера мгновенно пускается луч `Physics.Raycast`. Это технически проще и производительнее физических снарядов, а для дистанций стрелкового тренажёра — достаточно точно.
+
+Центральный метод стрельбы `PerformShoot()` компонента `AsRifleShoot` выполняет следующую последовательность:
+
+Листинг 2 — AsRifleShoot.cs, метод PerformShoot
+
+```csharp
+private void PerformShoot()
+{
+    if (!ammoInRifle)
+    {
+        gunanim?.Play("ShootEmpty");
+        return;
+    }
+
+    gunanim?.Play("Shoot");
+    bang?.PlayOneShot(bangClip);
+    ApplyRecoil();
+    StartCoroutine(SpawnWithDelay()); // гильза через 1 кадр
+
+    Vector3 dir = shootPoint.forward + new Vector3(
+        Random.Range(-0.01f, 0.01f),
+        Random.Range(-0.01f, 0.01f), 0f);
+
+    if (Physics.Raycast(shootPoint.position, dir.normalized,
+                        out RaycastHit hit, range))
+    {
+        SpawnImpact(hit);
+        if (hit.rigidbody != null)
+            hit.rigidbody.AddForceAtPosition(
+                dir * 10f, hit.point, ForceMode.Impulse);
+        if (hit.collider.CompareTag("Barrel"))
+            hit.collider.GetComponent<BarrelExplode>()?.Explode();
+    }
+
+    if (currentAmmo > 0) { currentAmmo--; magazineScript.Ammo = currentAmmo; }
+    else                   ammoInRifle = false;
+
+    StartCoroutine(FlashLight());
+}
+```
+
+Вектор направления луча случайно отклоняется в пределах ±0,01 по осям X и Y, имитируя естественный разброс. При обнаружении попадания создаётся визуальный след пробоины (`SpawnImpact`), объект получает физический импульс, а при теге `"Barrel"` вызывается взрыв. Вспышка дула (`FlashLight`) включает источник света `muzzleLight` на 50 мс.
+
+Тип стрельбы (одиночный / автоматический) управляется полем `fireMode` конфигурации. При автоматическом режиме флаг `triggerPressed` остаётся установленным пока удерживается триггер, и выстрелы производятся с интервалом `1f / fireRate` секунд.
+
+**2.2.3. Механика затвора**
+
+Затвор оружия реализован через компонент Unity `ConfigurableJoint`, который ограничивает движение объекта: оси X и Y зафиксированы, вдоль оси Z разрешено линейное перемещение. Это позволяет игроку физически потянуть рукоять затвора в VR-пространстве.
+
+Листинг 3 — BoltMechanics.cs, методы управления и автовозврата
+
+```csharp
+public void Grabbed()
+{
+    Release    = false;
+    Based      = false;    // затвор открыт
+    isFreezed  = false;    // снять фиксацию оси Z
+    GunAnim.enabled = false; // отключить аниматор на время физики
+}
+
+public void Released()
+{
+    Release = true;        // разрешить автовозврат
+}
+
+void Update()
+{
+    if (Release && !Based)
+    {
+        Vector3 local =
+            reference.InverseTransformPoint(transform.position);
+        // порог закрытого положения: 0.056 м / -0.054 м
+        if (local.z <= 0.056f && local.z >= -0.054f)
+        {
+            trans.localPosition =
+                new Vector3(0.05256491f, 0.01729099f, 0);
+            Release = Based = true;
+            isFreezed = true;
+            GunAnim.enabled = true;
+            Asrfl.TryToReload(); // досылание патрона
+        }
+    }
+}
+```
+
+Флаг `Based` означает «затвор закрыт и зафиксирован»: только при `Based == true` компонент стрельбы разрешает произвести выстрел (`IsClosed()` возвращает `Based`). При отпускании рукояти затвор под действием пружины возвращается в закрытое положение — отслеживается по пороговому значению локальной Z-координаты (0,056 м). После достижения порога затвор привязывается к закрытой позиции, аниматор включается, и вызывается `TryToReload()` для досылания патрона.
+
+`LateUpdate` фиксирует оси X и Y в сохранённых значениях каждый кадр, не допуская нежелательного дрейфа по этим осям под влиянием физики.
+
+**2.2.4. Система магазина**
+
+Магазин реализован как отдельный физический объект с компонентом `Magazine`. Гнездо для вставки (`XRSocketInteractor`) обнаруживает приближение объекта с нужным тегом и фиксирует его.
+
+Листинг 4 — Magazine.cs
+
+```csharp
+public class Magazine : MonoBehaviour
+{
+    public GameObject Bullets; // визуальные патроны внутри магазина
+    public Rigidbody  mag;
+    public int        Ammo = 30;
+
+    void Update()
+    {
+        if (Ammo <= 0 && Bullets != null)
+            Destroy(Bullets); // скрыть патроны при опустошении
+    }
+
+    public void AttachFunc()  { if (mag != null) mag.isKinematic = true;  }
+    public void ReleaseFunc() { if (mag != null) mag.isKinematic = false; }
+}
+```
+
+При вставке в гнездо срабатывает событие `selectEntered` сокета, которое `AsRifleShoot` слушает в `Start()`:
+
+```csharp
+private void OnObjectInserted(SelectEnterEventArgs args)
+{
+    magazine       = args.interactableObject.transform.gameObject;
+    magazineScript = magazine.GetComponent<Magazine>();
+    if (magazineScript != null)
+        currentAmmo = magazineScript.Ammo;
+}
+
+private void OnObjectRemoved(SelectExitEventArgs args)
+{
+    magazine = null; magazineScript = null; currentAmmo = 0;
+}
+```
+
+При извлечении счётчик `currentAmmo` обнуляется: без магазина выстрел невозможен. Когда `Ammo` достигает нуля, объект-дочерний `Bullets` уничтожается — пользователь визуально видит пустой магазин.
+
+**2.2.5. Физика гильз**
+
+`CasingSpawner` создаёт физический объект-гильзу при каждом выстреле. Задержка в один кадр (`yield return null`) синхронизирует спавн с анимацией выброса затвора.
+
+Листинг 5 — CasingSpawner.cs, метод Spawn (ключевая часть)
+
+```csharp
+public void Spawn()
+{
+    Transform target = spawnPoint != null ? spawnPoint : transform;
+
+    Quaternion rot = target.rotation
+        * Quaternion.Euler(rotationOffset)
+        * Quaternion.Euler(-90f, 0f, 0f); // ориентация гильзы
+
+    GameObject obj = Instantiate(prefab, target.position, rot);
+
+    Rigidbody rb = obj.GetComponent<Rigidbody>()
+                   ?? obj.AddComponent<Rigidbody>();
+
+    Vector3 worldDir = target.TransformDirection(
+        RandomizeDirection(impulseDirection).normalized);
+
+    rb.AddForce(worldDir * RandomizeForce(impulseForce),
+                ForceMode.Impulse);
+
+    Destroy(obj, lifeTime); // удалить через 60 с
+}
+
+private float RandomizeForce(float f)
+{
+    float p = forceRandomPercent / 100f;
+    return f * Random.Range(1f - p, 1f + p); // ±20% по умолчанию
+}
+```
+
+Рандомизация силы (±20 %) и направления (±15 %) обеспечивает естественное, непредсказуемое поведение каждой гильзы. Поворот −90° по оси X корректирует ориентацию модели гильзы относительно точки выброса. Автоматическое уничтожение через 60 секунд предотвращает накопление объектов в сцене.
+
+**2.2.6. Система отдачи**
+
+`HybridRecoil` реализует обратную связь непосредственно на трансформ VR-контроллера: при выстреле контроллер смещается назад и поворачивается вверх, затем плавно возвращается в исходное положение за два кадрово-независимых этапа.
+
+Листинг 6 — HybridRecoil.cs, метод Fire и фаза Update
+
+```csharp
+public void Fire()
+{
+    if (isRecoiling || grabInteractable == null) return;
+
+    var interactors = grabInteractable.interactorsSelecting;
+    if (interactors.Count == 0) return;
+
+    hands = new HandData[interactors.Count];
+    for (int i = 0; i < interactors.Count; i++)
+    {
+        var ctrl = interactors[i].transform;
+        hands[i] = new HandData {
+            controller       = ctrl,
+            originalPosition = ctrl.position,
+            originalRotation = ctrl.rotation
+        };
+    }
+    isRecoiling = true;
+    recoilTimer = 0f;
+}
+
+// Фрагмент Update — фаза 1: отдача
+if (recoilTimer <= recoilDuration)
+{
+    float t = recoilTimer / recoilDuration;
+    Vector3 offset = -ctrl.forward * recoilDistance
+                   +  ctrl.up     * (recoilDistance * 0.5f);
+    ctrl.position = hands[i].originalPosition + offset * (1f - t);
+    ctrl.rotation = hands[i].originalRotation
+                  * Quaternion.Euler(-recoilAngle * (1f - t), 0, 0);
+}
+```
+
+Параметры по умолчанию: смещение — 0,15 м, угол подброса — 8°, длительность отдачи — 0,1 с, скорость возврата — 5. Система поддерживает двуручный хват: при захвате оружия двумя руками отдача применяется к обоим контроллерам одновременно.
+
+**2.2.7. Управление моделями рук**
+
+При захвате оружия стандартная модель руки игрока скрывается, а вместо неё отображается модель руки, анимированной под данное оружие. При двуручном хвате показывается модель вторичного хвата.
+
+Листинг 7 — AsRifleGrab.cs, метод HandleHand
+
+```csharp
+private void HandleHand(IXRInteractor interactor, bool showPlayerHand)
+{
+    var t = interactor.transform;
+
+    if (t.CompareTag("LeftHand"))
+    {
+        if (rightHandOnWeapon.activeSelf) // правая уже держит
+        {
+            leftHandModel.SetActive(showPlayerHand);
+            leftSecondHand.SetActive(!showPlayerHand); // вторичный хват
+        }
+        else
+        {
+            leftHandModel.SetActive(showPlayerHand);
+            leftHandOnWeapon.SetActive(!showPlayerHand);
+        }
+    }
+    else if (t.CompareTag("RightHand"))
+    {
+        if (leftHandOnWeapon.activeSelf) // левая уже держит
+        {
+            rightHandModel.SetActive(showPlayerHand);
+            rightSecondHand.SetActive(!showPlayerHand);
+        }
+        else
+        {
+            rightHandModel.SetActive(showPlayerHand);
+            rightHandOnWeapon.SetActive(!showPlayerHand);
+        }
+    }
+}
+```
+
+Идентификация руки производится по тегам `"LeftHand"` / `"RightHand"`, назначенным GameObject-объектам контроллеров в иерархии XR Origin.
+
+**2.2.8. Пистолет**
+
+Система пистолета (`PistolShoot`, `PistolBoltMechanics`, `PistolGrab`, `PistolCasingSpawner`) реализована по той же архитектуре, что и система винтовки. Ключевые отличия:
+
+- `PistolShoot` не имеет режима Auto — только Single (одиночный огонь при каждом нажатии триггера);
+- `PistolCasingSpawner.PistolCasSpawn(float delay)` вызывает Spawn с задержкой через `Invoke`, а не через корутину;
+- `PistolGrab` не поддерживает вторичный хват (пистолет держится одной рукой), поэтому поля `leftSecondHand` и `rightSecondHand` отсутствуют;
+- параметры пистолета — отдельный файл `WeaponConfig`, настроенный под более высокую скорострельность и меньшую дальность.
+
+**2.2.9. Разрушаемые объекты**
+
+Взрывные бочки размещены в сцене как декоративные объекты с компонентом `BarrelExplode` и тегом `"Barrel"`. При попадании пули из `AsRifleShoot.PerformShoot()` вызывается:
+
+Листинг 8 — BarrelExplode.cs
+
+```csharp
+public class BarrelExplode : MonoBehaviour
+{
+    public GameObject onShotEffect; // партикловый эффект взрыва
+    public GameObject barrel;       // меш бочки
+
+    public void Explode()
+    {
+        Instantiate(onShotEffect,
+            barrel.transform.position,
+            barrel.transform.rotation);
+        Destroy(barrel);
+    }
+}
+```
+
+Метод создаёт партикловый эффект в позиции бочки и немедленно уничтожает её меш. Тег `"Barrel"` проверяется в методе стрельбы до применения обычного эффекта пробоины, поэтому на бочках не появляется след пули.
+
+**Вывод по разделу.** Реализована полная система оружия для двух единиц (винтовка и пистолет), включающая: хитскан-стрельбу с разбросом, физический затвор на ConfigurableJoint, систему магазина через XRSocketInteractor, физику гильз с рандомизацией, двухфазную отдачу VR-контроллера, динамическую смену моделей рук и разрушаемые объекты. Все требования ФТ-02 — ФТ-10 выполнены.
+
 ---
