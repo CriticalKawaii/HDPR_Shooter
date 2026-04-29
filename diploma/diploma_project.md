@@ -345,4 +345,100 @@ GIMP выбран как бесплатная альтернатива Adobe Pho
 
 **Вывод по разделу.** Выбранный стек инструментов — Unity 6 + HDRP + XRI + New Input System + Visual Studio + GIMP + Blender — обеспечивает полный цикл разработки VR-приложения: от программирования игровой логики до создания визуальных ресурсов. Все инструменты либо являются отраслевым стандартом (Unity, Visual Studio), либо предоставляют функциональность, сопоставимую с коммерческими аналогами, на условиях бесплатной лицензии (Blender, GIMP).
 
+### 1.6. Информационно-логическая модель приложения
+
+**Диаграмма вариантов использования (Use Case)**
+
+Диаграмма вариантов использования описывает взаимодействие между актёрами системы и её функциями. В разрабатываемом приложении выделяются два актёра: **Игрок** (пользователь VR-гарнитуры) и **Система** (GameManager, управляющий игровым циклом).
+
+Таблица 7 — Варианты использования: Игрок
+
+| Вариант использования | Описание | Предусловие |
+|---|---|---|
+| Захватить оружие | Взять оружие со стола VR-контроллером | Оружие находится в зоне досягаемости |
+| Произвести выстрел | Нажать триггер контроллера | Оружие захвачено, патрон в патроннике |
+| Вставить магазин | Поднести магазин к гнезду оружия | Оружие захвачено, гнездо свободно |
+| Извлечь магазин | Потянуть магазин из гнезда оружия | Магазин вставлен в гнездо |
+| Потянуть затвор | Захватить и потянуть рукоять затвора | Оружие захвачено, магазин вставлен |
+| Нажать кнопку старта | Нажать физическую кнопку в сцене | Раунд не активен |
+| Подобрать магазин | Взять спавнящийся магазин со стола | Раунд активен |
+
+Таблица 8 — Варианты использования: Система (GameManager)
+
+| Вариант использования | Описание | Триггер |
+|---|---|---|
+| Запустить обратный отсчёт | Отобразить отсчёт 3–2–1 | Нажатие кнопки игроком |
+| Показать границу | Отобразить красную границу в сцене | Конец отсчёта |
+| Спавнить мишень | Создать мишень в случайной точке зоны | Начало раунда / уничтожение предыдущей |
+| Переместить мишень | Двигать мишень в сторону игрока | Каждый кадр в активном раунде |
+| Начислить очки | Обновить счёт при попадании | Попадание в мишень |
+| Применить штраф | Вычесть 300 очков | Мишень пересекла границу |
+| Спавнить магазин | Создать магазин на столе | Старт раунда / подбор предыдущего |
+| Завершить раунд | Остановить раунд, показать статистику | Таймер истёк ИЛИ счёт < 0 |
+
+**Диаграмма классов**
+
+Ниже описаны основные классы системы с атрибутами, методами и связями между ними.
+
+`WeaponConfig` (ScriptableObject)
+- Атрибуты: `weaponName : string`, `weaponType : WeaponType`, `fireMode : FireMode`, `fireRate : float`, `range : float`, `magazineCapacity : int`, `recoilBack : float`, `recoilUp : float`, `recoilReturnSpeed : float`, `recoilKickSpeed : float`, `hasBolt : bool`, `casingEjectDirection : Vector3`, `casingForce : float`, `casingLifetime : float`
+- Связь: используется `AsRifleShoot`, `WeaponController`
+
+`AsRifleShoot` (MonoBehaviour)
+- Атрибуты: `currentAmmo : int`, `ammoInRifle : bool`, `fireRate : float`, `range : float`
+- Методы: `Shoot()`, `Shootoff()`, `TryShoot()`, `PerformShoot()`, `TryToReload()`, `Grab()`, `Release()`
+- События: `OnWeaponGrabbed`, `OnWeaponReleased`
+- Зависит от: `BoltMechanics`, `Magazine`, `CasingSpawner`, `HybridRecoil`
+
+`BoltMechanics` (MonoBehaviour)
+- Атрибуты: `Based : bool` (затвор закрыт), `isFreezed : bool`, `Release : bool`
+- Методы: `Grabbed()`, `Released()`, `IsClosed() : bool`
+- Использует: `ConfigurableJoint`, `Animator`
+- Вызывает: `AsRifleShoot.TryToReload()`
+
+`HybridRecoil` (MonoBehaviour)
+- Атрибуты: `recoilDistance : float`, `recoilAngle : float`, `recoilDuration : float`, `returnSpeed : float`, `isRecoiling : bool`
+- Методы: `Fire()`, `CancelRecoil()`
+- Зависит от: `XRGrabInteractable`
+
+`CasingSpawner` (MonoBehaviour)
+- Атрибуты: `impulseForce : float`, `impulseDirection : Vector3`, `lifeTime : float`, `forceRandomPercent : float`, `directionRandomPercent : float`
+- Методы: `Spawn()`, `Spawn(delay : float)`, `SpawnWithLocalDirection(Vector3)`, `SpawnAtPosition(Vector3)`
+
+`Magazine` (MonoBehaviour)
+- Атрибуты: `Ammo : int`, `Bullets : GameObject`, `mag : Rigidbody`
+- Методы: `AttachFunc()`, `ReleaseFunc()`
+- Связан с: `AsRifleShoot` (через `XRSocketInteractor`)
+
+`AsRifleGrab` (MonoBehaviour)
+- Методы: `OnGrab(SelectEnterEventArgs)`, `OnRelease(SelectExitEventArgs)`, `HandleHand(IXRInteractor, bool)`
+- Управляет: `leftHandModel`, `rightHandModel`, `leftHandOnWeapon`, `rightHandOnWeapon`, `leftSecondHand`, `rightSecondHand`
+
+`BarrelExplode` (MonoBehaviour)
+- Атрибуты: `onShotEffect : GameObject`, `barrel : GameObject`
+- Методы: `Explode()`
+- Вызывается из: `AsRifleShoot.PerformShoot()` при обнаружении тега `"Barrel"`
+
+`TriggerInput` (MonoBehaviour)
+- Атрибуты: `triggerAction : InputActionReference`
+- Методы: `OnTriggerPerformed()`, `OnTriggerCanceled()`
+- Вызывает: `WeaponController.TriggerPress()`, `WeaponController.TriggerRelease()`
+
+Таблица 9 — Связи между классами
+
+| Класс | Тип связи | Связанный класс |
+|---|---|---|
+| `AsRifleShoot` | Зависимость | `BoltMechanics` (проверяет IsClosed) |
+| `AsRifleShoot` | Агрегация | `Magazine` (через XRSocketInteractor) |
+| `AsRifleShoot` | Ассоциация | `CasingSpawner` (вызов Spawn) |
+| `AsRifleShoot` | Ассоциация | `HybridRecoil` (вызов Fire) |
+| `BoltMechanics` | Вызов | `AsRifleShoot.TryToReload()` |
+| `TriggerInput` | Вызов | `WeaponController.TriggerPress/Release()` |
+| `WeaponController` | Использование | `WeaponConfig` (конфигурация) |
+| `BarrelExplode` | Вызов извне | `AsRifleShoot.PerformShoot()` |
+
+**Вывод по разделу.** Информационно-логическая модель определяет полный состав классов системы, их атрибуты, методы и связи, а также сценарии взаимодействия пользователя с приложением. Модель служит основой для практической реализации, описанной в Главе 2. Диаграмма классов подтверждает модульность архитектуры: каждый класс имеет чётко ограниченную зону ответственности, а зависимости между классами минимальны и направлены в одну сторону.
+
+**Выводы по главе 1.** В ходе предпроектного исследования установлено, что рынок VR-приложений демонстрирует устойчивый рост, а жанр Action/Shooter является наиболее органичным для VR-формата. Анализ четырёх аналогов выявил отсутствие приложения, сочетающего HDRP-рендеринг, современную XR-платформу и полноценную систему оценки точности. Сформулированы 18 функциональных и 6 нефункциональных требований. Обоснован выбор стека инструментов (Unity 6, HDRP, XRI, Visual Studio, GIMP, Blender). Разработана информационно-логическая модель, определяющая архитектуру и взаимодействие компонентов системы.
+
 ---
