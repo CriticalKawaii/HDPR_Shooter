@@ -1402,3 +1402,784 @@ XR Device Simulator — встроенный инструмент Unity XR Inter
 Дипломный проект в полной мере достиг поставленной цели: разработана компьютерная игра с применением XR-технологий, представляющая собой функциональный стрелковый тренажёр с реалистичными физическими механиками оружия и системой оценки результатов.
 
 ---
+
+## ПРИЛОЖЕНИЯ
+
+### ПРИЛОЖЕНИЕ А — WeaponController.cs (базовый класс оружия)
+
+```csharp
+using System.Collections;
+using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
+
+[RequireComponent(typeof(XRGrabInteractable))]
+public class WeaponController : MonoBehaviour
+{
+    [Header("Config")]
+    public WeaponConfig config;
+
+    [Header("References — assign in prefab")]
+    public Transform shootPoint;
+    public Transform recoilRoot;
+    public XRSocketInteractor magazineSocket;
+    public Animator weaponAnimator;
+    public AudioSource audioSource;
+    public AudioClip fireSound;
+    public AudioClip emptySound;
+    public Light muzzleLight;
+    public GameObject impactEffectPrefab;
+    public GameObject casingPrefab;
+    public Transform casingEjectPoint;
+
+    [Header("Hand Models")]
+    public GameObject leftHandPlayer;
+    public GameObject rightHandPlayer;
+    public GameObject leftHandOnWeapon;
+    public GameObject rightHandOnWeapon;
+    public GameObject leftHandSecondary;
+    public GameObject rightHandSecondary;
+
+    public int CurrentAmmo { get; private set; }
+    public bool RoundChambered { get; private set; }
+    public bool BoltClosed { get; private set; } = true;
+
+    private bool _triggerHeld;
+    private float _nextFireTime;
+    private Magazine _magazine;
+    private XRGrabInteractable _grab;
+    private Vector3 _recoilInitialLocalPos;
+    private Vector3 _currentRecoil;
+    private Vector3 _targetRecoil;
+
+    public event System.Action<WeaponController> OnGrabbed;
+    public event System.Action<WeaponController> OnReleased;
+
+    void Awake()
+    {
+        _grab = GetComponent<XRGrabInteractable>();
+    }
+
+    void Start()
+    {
+        if (recoilRoot != null)
+            _recoilInitialLocalPos = recoilRoot.localPosition;
+
+        SetHandModels(leftHandOnWeapon, false);
+        SetHandModels(rightHandOnWeapon, false);
+        SetHandModels(leftHandSecondary, false);
+        SetHandModels(rightHandSecondary, false);
+
+        _grab.selectEntered.AddListener(OnSelectEntered);
+        _grab.selectExited.AddListener(OnSelectExited);
+
+        if (magazineSocket != null)
+        {
+            magazineSocket.selectEntered.AddListener(OnMagazineInserted);
+            magazineSocket.selectExited.AddListener(OnMagazineRemoved);
+        }
+    }
+
+    void Update()
+    {
+        UpdateRecoil();
+
+        if (_triggerHeld && Time.time >= _nextFireTime)
+        {
+            TryFire();
+            if (config.fireMode == FireMode.Single)
+                _triggerHeld = false;
+            _nextFireTime = Time.time + 1f / config.fireRate;
+        }
+    }
+
+    public void TriggerPress() => _triggerHeld = true;
+
+    public void TriggerRelease()
+    {
+        _triggerHeld = false;
+        weaponAnimator?.Play("Idle");
+    }
+
+    public void NotifyBoltOpened() => BoltClosed = false;
+
+    public void NotifyBoltClosed()
+    {
+        BoltClosed = true;
+        ChamberRound();
+    }
+
+    public void ChamberRound()
+    {
+        if (!RoundChambered && CurrentAmmo > 0)
+        {
+            RoundChambered = true;
+            CurrentAmmo--;
+            if (_magazine != null) _magazine.Ammo = CurrentAmmo;
+        }
+    }
+
+    private void TryFire()
+    {
+        if (!BoltClosed) return;
+        if (!RoundChambered)
+        {
+            PlaySound(emptySound);
+            weaponAnimator?.Play("ShootEmpty");
+            return;
+        }
+        Fire();
+    }
+
+    private void Fire()
+    {
+        RoundChambered = false;
+        weaponAnimator?.Play("Shoot");
+        PlaySound(fireSound);
+        ApplyRecoil();
+        StartCoroutine(MuzzleFlash());
+        StartCoroutine(EjectCasing());
+        CastBullet();
+        if (config.hasBolt)
+            ChamberRound();
+    }
+
+    private void CastBullet()
+    {
+        if (shootPoint == null) return;
+        Vector3 dir = shootPoint.forward + new Vector3(
+            Random.Range(-0.01f, 0.01f),
+            Random.Range(-0.01f, 0.01f), 0f);
+
+        if (!Physics.Raycast(shootPoint.position, dir.normalized,
+                             out RaycastHit hit, config.range)) return;
+        SpawnImpact(hit);
+        if (hit.rigidbody != null)
+            hit.rigidbody.AddForceAtPosition(dir * 10f,
+                hit.point, ForceMode.Impulse);
+        if (hit.collider.CompareTag("Barrel"))
+            hit.collider.GetComponent<BarrelExplode>()?.Explode();
+    }
+
+    private void SpawnImpact(RaycastHit hit)
+    {
+        if (impactEffectPrefab == null) return;
+        var impact = Instantiate(impactEffectPrefab,
+            hit.point + hit.normal * 0.01f,
+            Quaternion.LookRotation(hit.normal) * Quaternion.Euler(0, 180, 0));
+        impact.transform.localScale = Vector3.one * 0.05f;
+        impact.transform.SetParent(hit.collider.transform, true);
+        Destroy(impact, 5f);
+    }
+
+    private void ApplyRecoil()
+    {
+        _targetRecoil += new Vector3(0f, config.recoilUp, -config.recoilBack);
+    }
+
+    private void UpdateRecoil()
+    {
+        _targetRecoil = Vector3.Lerp(_targetRecoil, Vector3.zero,
+            Time.deltaTime * config.recoilReturnSpeed);
+        _currentRecoil = Vector3.Lerp(_currentRecoil, _targetRecoil,
+            Time.deltaTime * config.recoilKickSpeed);
+        if (recoilRoot != null)
+            recoilRoot.localPosition = _recoilInitialLocalPos + _currentRecoil;
+    }
+
+    private void OnMagazineInserted(SelectEnterEventArgs args)
+    {
+        _magazine = args.interactableObject.transform.GetComponent<Magazine>();
+        if (_magazine != null) CurrentAmmo = _magazine.Ammo;
+    }
+
+    private void OnMagazineRemoved(SelectExitEventArgs args)
+    {
+        _magazine = null;
+        CurrentAmmo = 0;
+    }
+
+    private void OnSelectEntered(SelectEnterEventArgs args)
+    {
+        var t = args.interactorObject.transform;
+        bool isLeft  = t.CompareTag("LeftHand");
+        bool isRight = t.CompareTag("RightHand");
+
+        if (isLeft)
+        {
+            bool rightHolding = rightHandOnWeapon != null && rightHandOnWeapon.activeSelf;
+            SetHandModels(leftHandPlayer, false);
+            SetHandModels(rightHolding ? leftHandSecondary : leftHandOnWeapon, true);
+        }
+        else if (isRight)
+        {
+            bool leftHolding = leftHandOnWeapon != null && leftHandOnWeapon.activeSelf;
+            SetHandModels(rightHandPlayer, false);
+            SetHandModels(leftHolding ? rightHandSecondary : rightHandOnWeapon, true);
+        }
+        OnGrabbed?.Invoke(this);
+    }
+
+    private void OnSelectExited(SelectExitEventArgs args)
+    {
+        var t = args.interactorObject.transform;
+        if (t.CompareTag("LeftHand"))
+        {
+            SetHandModels(leftHandPlayer, true);
+            SetHandModels(leftHandOnWeapon, false);
+            SetHandModels(leftHandSecondary, false);
+        }
+        else if (t.CompareTag("RightHand"))
+        {
+            SetHandModels(rightHandPlayer, true);
+            SetHandModels(rightHandOnWeapon, false);
+            SetHandModels(rightHandSecondary, false);
+        }
+        OnReleased?.Invoke(this);
+    }
+
+    private static void SetHandModels(GameObject obj, bool active)
+    {
+        if (obj != null) obj.SetActive(active);
+    }
+
+    private IEnumerator MuzzleFlash()
+    {
+        if (muzzleLight == null) yield break;
+        muzzleLight.enabled = true;
+        yield return new WaitForSeconds(0.05f);
+        muzzleLight.enabled = false;
+    }
+
+    private IEnumerator EjectCasing()
+    {
+        yield return null;
+        if (casingPrefab == null || casingEjectPoint == null) yield break;
+        var go = Instantiate(casingPrefab, casingEjectPoint.position,
+            casingEjectPoint.rotation * Quaternion.Euler(-90f, 0f, 0f));
+        var rb = go.GetComponent<Rigidbody>() ?? go.AddComponent<Rigidbody>();
+        Vector3 worldDir = casingEjectPoint.TransformDirection(
+            config.casingEjectDirection.normalized);
+        rb.AddForce(worldDir * config.casingForce, ForceMode.Impulse);
+        Destroy(go, config.casingLifetime);
+    }
+
+    private void PlaySound(AudioClip clip)
+    {
+        if (audioSource != null && clip != null)
+            audioSource.PlayOneShot(clip);
+    }
+}
+```
+
+---
+
+### ПРИЛОЖЕНИЕ Б — WeaponConfig.cs (конфигурация оружия)
+
+```csharp
+using UnityEngine;
+
+[CreateAssetMenu(fileName = "WeaponConfig", menuName = "Weapons/Config")]
+public class WeaponConfig : ScriptableObject
+{
+    [Header("Identity")]
+    public string weaponName;
+    public WeaponType weaponType;
+
+    [Header("Firing")]
+    public FireMode fireMode = FireMode.Auto;
+    public float fireRate = 10f;
+    public float range = 100f;
+    public int magazineCapacity = 30;
+
+    [Header("Recoil")]
+    public float recoilBack = 0.06f;
+    public float recoilUp = 0.025f;
+    public float recoilReturnSpeed = 10f;
+    public float recoilKickSpeed = 20f;
+
+    [Header("Bolt")]
+    public bool hasBolt = true;
+    public Vector3 boltClosedLocalPosition;
+
+    [Header("Casing")]
+    public Vector3 casingEjectDirection = new Vector3(-1f, 1f, 0f);
+    public float casingForce = 10f;
+    public float casingLifetime = 60f;
+}
+
+public enum WeaponType { Pistol, Rifle, SMG, Shotgun, Sniper, MG }
+public enum FireMode   { Single, Auto, Burst }
+```
+
+---
+
+### ПРИЛОЖЕНИЕ В — BoltMechanics.cs (механика затвора винтовки)
+
+```csharp
+using UnityEngine;
+
+public class BoltMechanics : MonoBehaviour
+{
+    public ConfigurableJoint cfgjoint;
+    public Transform trans;
+    public Rigidbody rb;
+    public Rigidbody rbRifle;
+    public Transform reference;
+    public AsRifleShoot Asrfl;
+    public Animator GunAnim;
+
+    private float savedLocalY;
+    private float savedLocalX;
+    private float savedLocalZ;
+    private bool isFreezed = true;
+
+    [Header("Recoil")]
+    public float recoilForce = 25f;
+    private bool Based   = true;
+    private bool Release = true;
+    JointDrive currentXDrive;
+
+    void Start()
+    {
+        JointDrive currentXDrive = cfgjoint.xDrive;
+        Vector3 localPos = reference.InverseTransformPoint(transform.position);
+        savedLocalY = localPos.y;
+        savedLocalX = localPos.x;
+        savedLocalZ = localPos.z;
+    }
+
+    void LateUpdate()
+    {
+        Vector3 currentLocal = reference.InverseTransformPoint(transform.position);
+        if (isFreezed && !GunAnim.GetCurrentAnimatorStateInfo(0).IsName("Shoot"))
+            currentLocal.z = savedLocalZ;
+        currentLocal.y = savedLocalY;
+        currentLocal.x = savedLocalX;
+        transform.position = reference.TransformPoint(currentLocal);
+    }
+
+    void Update()
+    {
+        if (GunAnim.GetCurrentAnimatorStateInfo(0).IsName("Shoot")
+            && currentXDrive.positionSpring == 20000f)
+            currentXDrive.positionSpring = 0f;
+        else if (!GunAnim.GetCurrentAnimatorStateInfo(0).IsName("Shoot")
+                 && currentXDrive.positionSpring == 0f)
+            currentXDrive.positionSpring = 20000f;
+
+        if (Release && !Based)
+        {
+            Vector3 currentLocal =
+                reference.InverseTransformPoint(transform.position);
+            if (currentLocal.z <= 0.056f && currentLocal.z >= -0.054f)
+            {
+                trans.localPosition = new Vector3(0.05256491f, 0.01729099f, 0);
+                Release  = false;
+                Based    = true;
+                isFreezed = true;
+                GunAnim.enabled = true;
+                Asrfl.TryToReload();
+            }
+        }
+    }
+
+    public void Grabbed()
+    {
+        Release   = false;
+        Based     = false;
+        isFreezed = false;
+        GunAnim.enabled = false;
+    }
+
+    public void Released() { Release = true; }
+
+    public bool IsClosed() { return Based; }
+
+    public void ApplyRecoil() { return; }
+}
+```
+
+---
+
+### ПРИЛОЖЕНИЕ Г — HybridRecoil.cs (отдача VR-контроллера)
+
+```csharp
+using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
+
+public class HybridRecoil : MonoBehaviour
+{
+    [Header("Recoil Settings")]
+    public float recoilDistance = 0.15f;
+    public float recoilAngle    = 8f;
+    public float recoilDuration = 0.1f;
+    public float returnSpeed    = 5f;
+
+    [Header("References")]
+    public XRGrabInteractable grabInteractable;
+
+    private bool isRecoiling = false;
+    private float recoilTimer = 0f;
+
+    private class HandData
+    {
+        public Transform   controller;
+        public Vector3     originalPosition;
+        public Quaternion  originalRotation;
+    }
+
+    private HandData[] hands = new HandData[0];
+
+    void Start()
+    {
+        if (grabInteractable == null)
+            grabInteractable = GetComponent<XRGrabInteractable>();
+    }
+
+    public void Fire()
+    {
+        if (isRecoiling || grabInteractable == null) return;
+        var interactors = grabInteractable.interactorsSelecting;
+        if (interactors.Count == 0) return;
+
+        hands = new HandData[interactors.Count];
+        for (int i = 0; i < interactors.Count; i++)
+        {
+            var ctrl = interactors[i].transform;
+            hands[i] = new HandData {
+                controller       = ctrl,
+                originalPosition = ctrl.position,
+                originalRotation = ctrl.rotation
+            };
+        }
+        isRecoiling = true;
+        recoilTimer = 0f;
+    }
+
+    void Update()
+    {
+        if (!isRecoiling || hands.Length == 0) return;
+        recoilTimer += Time.deltaTime;
+
+        if (grabInteractable == null ||
+            grabInteractable.interactorsSelecting.Count == 0)
+        {
+            CancelRecoil();
+            return;
+        }
+
+        for (int i = 0; i < hands.Length; i++)
+        {
+            if (hands[i]?.controller == null) continue;
+            Transform ctrl = hands[i].controller;
+
+            if (recoilTimer <= recoilDuration)
+            {
+                float t = recoilTimer / recoilDuration;
+                Vector3 offset = -ctrl.forward * recoilDistance
+                               +  ctrl.up      * (recoilDistance * 0.5f);
+                ctrl.position = hands[i].originalPosition + offset * (1f - t);
+                ctrl.rotation = hands[i].originalRotation
+                              * Quaternion.Euler(-recoilAngle * (1f - t), 0, 0);
+            }
+            else
+            {
+                float ret = (recoilTimer - recoilDuration) * returnSpeed;
+                if (ret >= 1f)
+                {
+                    ctrl.position = hands[i].originalPosition;
+                    ctrl.rotation = hands[i].originalRotation;
+                }
+                else
+                {
+                    Vector3    recoilPos = hands[i].originalPosition
+                        - ctrl.forward * recoilDistance
+                        + ctrl.up      * (recoilDistance * 0.5f);
+                    Quaternion recoilRot = hands[i].originalRotation
+                        * Quaternion.Euler(-recoilAngle, 0, 0);
+                    ctrl.position = Vector3.Lerp(recoilPos,
+                        hands[i].originalPosition, ret);
+                    ctrl.rotation = Quaternion.Lerp(recoilRot,
+                        hands[i].originalRotation, ret);
+                }
+            }
+        }
+
+        if (recoilTimer > recoilDuration + (1f / returnSpeed))
+        {
+            isRecoiling = false;
+            hands = new HandData[0];
+        }
+    }
+
+    public void CancelRecoil()
+    {
+        if (!isRecoiling || hands.Length == 0) return;
+        foreach (var h in hands)
+        {
+            if (h?.controller != null)
+            {
+                h.controller.position = h.originalPosition;
+                h.controller.rotation = h.originalRotation;
+            }
+        }
+        isRecoiling = false;
+        hands = new HandData[0];
+    }
+
+    void OnDisable() { CancelRecoil(); }
+}
+```
+
+---
+
+### ПРИЛОЖЕНИЕ Д — CasingSpawner.cs (система выброса гильз)
+
+```csharp
+using UnityEngine;
+
+public class CasingSpawner : MonoBehaviour
+{
+    [SerializeField] private GameObject prefab;
+    [SerializeField] private Transform  spawnPoint;
+    [SerializeField] private float      impulseForce = 10f;
+    [SerializeField] private Vector3    impulseDirection = new Vector3(-1f, 1f, 0f);
+    [SerializeField] private float      lifeTime = 60f;
+
+    [SerializeField] private bool    matchSpawnPointRotation = true;
+    [SerializeField] private Vector3 rotationOffset = Vector3.zero;
+
+    [SerializeField] [Range(0f, 100f)] private float forceRandomPercent     = 20f;
+    [SerializeField] [Range(0f, 100f)] private float directionRandomPercent = 15f;
+
+    public void Spawn()
+    {
+        if (prefab == null) { Debug.LogError("Префаб не назначен!"); return; }
+
+        Transform target = spawnPoint != null ? spawnPoint : transform;
+
+        Quaternion baseRot  = matchSpawnPointRotation
+                              ? target.rotation : Quaternion.identity;
+        Quaternion finalRot = baseRot
+                              * Quaternion.Euler(rotationOffset)
+                              * Quaternion.Euler(-90f, 0f, 0f);
+
+        GameObject obj = Instantiate(prefab, target.position, finalRot);
+
+        Rigidbody rb = obj.GetComponent<Rigidbody>()
+                       ?? obj.AddComponent<Rigidbody>();
+
+        Vector3 worldDir = target.TransformDirection(
+            RandomizeDirection(impulseDirection).normalized);
+
+        rb.AddForce(worldDir * RandomizeForce(impulseForce), ForceMode.Impulse);
+        Destroy(obj, lifeTime);
+    }
+
+    public void Spawn(float delay) { Invoke(nameof(Spawn), delay); }
+
+    private float RandomizeForce(float f)
+    {
+        float p = forceRandomPercent / 100f;
+        return f * Random.Range(1f - p, 1f + p);
+    }
+
+    private Vector3 RandomizeDirection(Vector3 d)
+    {
+        float p = directionRandomPercent / 100f;
+        return new Vector3(
+            d.x * Random.Range(1f - p, 1f + p),
+            d.y * Random.Range(1f - p, 1f + p),
+            d.z * Random.Range(1f - p, 1f + p)
+        ).normalized;
+    }
+
+    private void OnValidate()
+    {
+        impulseDirection = impulseDirection.magnitude > 0
+            ? impulseDirection.normalized
+            : new Vector3(-1f, 1f, 0f).normalized;
+    }
+}
+```
+
+---
+
+### ПРИЛОЖЕНИЕ Е — Magazine.cs и TriggerInput.cs
+
+**Magazine.cs — данные боезапаса магазина**
+
+```csharp
+using UnityEngine;
+
+public class Magazine : MonoBehaviour
+{
+    public GameObject Bullets;
+    public Rigidbody  mag;
+    public int        Ammo = 30;
+
+    void Update()
+    {
+        if (Ammo <= 0 && Bullets != null)
+            Destroy(Bullets);
+    }
+
+    public void AttachFunc()  { if (mag != null) mag.isKinematic = true;  }
+    public void ReleaseFunc() { if (mag != null) mag.isKinematic = false; }
+}
+```
+
+**TriggerInput.cs — обработка нажатия триггера**
+
+```csharp
+using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
+
+public class TriggerInput : MonoBehaviour
+{
+    public InputActionReference triggerAction;
+    private WeaponController   _weapon;
+    private XRGrabInteractable _grab;
+
+    void Awake()
+    {
+        _weapon = GetComponent<WeaponController>();
+        _grab   = GetComponent<XRGrabInteractable>();
+    }
+
+    void OnEnable()
+    {
+        triggerAction.action.performed += OnTriggerPerformed;
+        triggerAction.action.canceled  += OnTriggerCanceled;
+        triggerAction.action.Enable();
+    }
+
+    void OnDisable()
+    {
+        triggerAction.action.performed -= OnTriggerPerformed;
+        triggerAction.action.canceled  -= OnTriggerCanceled;
+    }
+
+    private void OnTriggerPerformed(InputAction.CallbackContext _)
+    {
+        if (_grab.isSelected) _weapon.TriggerPress();
+    }
+
+    private void OnTriggerCanceled(InputAction.CallbackContext _)
+    {
+        _weapon.TriggerRelease();
+    }
+}
+```
+
+---
+
+### ПРИЛОЖЕНИЕ Ж — BarrelExplode.cs и AsRifleGrab.cs
+
+**BarrelExplode.cs — разрушаемый объект**
+
+```csharp
+using UnityEngine;
+
+public class BarrelExplode : MonoBehaviour
+{
+    public GameObject onShotEffect;
+    public GameObject barrel;
+
+    public void Explode()
+    {
+        Instantiate(onShotEffect,
+            barrel.transform.position,
+            barrel.transform.rotation);
+        Destroy(barrel);
+    }
+}
+```
+
+**AsRifleGrab.cs — управление моделями рук при захвате оружия**
+
+```csharp
+using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
+
+public class AsRifleGrab : MonoBehaviour
+{
+    [SerializeField] private GameObject leftHandModel;
+    [SerializeField] private GameObject rightHandModel;
+    [SerializeField] private GameObject leftHandOnWeapon;
+    [SerializeField] private GameObject rightHandOnWeapon;
+    [SerializeField] private GameObject leftSecondHand;
+    [SerializeField] private GameObject rightSecondHand;
+    [SerializeField] private bool enableDebug = true;
+
+    private XRGrabInteractable grab;
+
+    private void Awake()  { grab = GetComponent<XRGrabInteractable>(); }
+
+    private void Start()
+    {
+        if (leftHandOnWeapon  != null) leftHandOnWeapon.SetActive(false);
+        if (rightHandOnWeapon != null) rightHandOnWeapon.SetActive(false);
+    }
+
+    private void OnEnable()
+    {
+        if (grab == null) return;
+        grab.selectEntered.AddListener(OnGrab);
+        grab.selectExited.AddListener(OnRelease);
+    }
+
+    private void OnDisable()
+    {
+        if (grab == null) return;
+        grab.selectEntered.RemoveListener(OnGrab);
+        grab.selectExited.RemoveListener(OnRelease);
+    }
+
+    private void OnGrab(SelectEnterEventArgs args)
+        => HandleHand(args.interactorObject, false);
+
+    private void OnRelease(SelectExitEventArgs args)
+        => HandleHand(args.interactorObject, true);
+
+    private void HandleHand(IXRInteractor interactor, bool showPlayerHand)
+    {
+        if (interactor == null) return;
+        var t = interactor.transform;
+
+        if (t.CompareTag("LeftHand"))
+        {
+            if (rightHandOnWeapon.activeSelf)
+            {
+                leftHandModel.SetActive(showPlayerHand);
+                leftSecondHand.SetActive(!showPlayerHand);
+            }
+            else
+            {
+                leftHandModel.SetActive(showPlayerHand);
+                leftHandOnWeapon.SetActive(!showPlayerHand);
+            }
+        }
+        else if (t.CompareTag("RightHand"))
+        {
+            if (leftHandOnWeapon.activeSelf)
+            {
+                rightHandModel.SetActive(showPlayerHand);
+                rightSecondHand.SetActive(!showPlayerHand);
+            }
+            else
+            {
+                rightHandModel.SetActive(showPlayerHand);
+                rightHandOnWeapon.SetActive(!showPlayerHand);
+            }
+        }
+    }
+}
+```
+
