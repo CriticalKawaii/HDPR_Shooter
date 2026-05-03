@@ -115,17 +115,20 @@ public class AsRifleShoot : MonoBehaviour
 
     private void ApplyRecoil()
     {
-        float side = Random.Range(0f, 0f);
+        // Локальный вектор отдачи (относительно оружия/камеры)
+        Vector3 localRecoil = new Vector3(0, recoilUpDistance, -recoilBackDistance);
 
-        targetRecoil += new Vector3(
-            side,
-            recoilUpDistance,
-            -recoilBackDistance
-        );
+        // Преобразуем локальный вектор в мировые координаты с учетом поворота оружия
+        Vector3 worldRecoil = transform.TransformDirection(localRecoil);
+
+        targetRecoil += worldRecoil;
 
         if (weaponRb != null)
         {
-            weaponRb.AddTorque(new Vector3(-recoilTorque, 0, 0), ForceMode.Impulse);
+            // Торк тоже нужно применять локально
+            Vector3 localTorque = new Vector3(-recoilTorque, 0, 0);
+            Vector3 worldTorque = transform.TransformDirection(localTorque);
+            weaponRb.AddTorque(worldTorque, ForceMode.Impulse);
         }
     }
 
@@ -224,21 +227,34 @@ public class AsRifleShoot : MonoBehaviour
         {
             SpawnImpact(hit);
             Rigidbody rb = hit.rigidbody;
-            if (rb != null)
+            if (hit.collider.CompareTag("TorsoTargetBody"))
+            {
+                TargetDynamic targetscript = hit.collider.GetComponent<TargetDynamic>();
+                if (targetscript != null)
+                    targetscript.TorsoBodyHit();
+            }
+            else if (hit.collider.CompareTag("TorsoTargetHead"))
+            {
+                TargetDynamic targetscript = hit.collider.GetComponentInParent<TargetDynamic>();
+                if (targetscript != null)
+                    targetscript.TorsoHeadHit();
+            }
+            else if (hit.collider.CompareTag("Barrel"))
+            {
+                BarrelExplode barrelExplode = hit.collider.GetComponent<BarrelExplode>();
+                if (barrelExplode != null)
+                {
+                    barrelExplode.Explode();
+                }
+            }
+            else if (rb != null)
             {
                 float forceMagnitude = 10f;
                 Vector3 forceDirection = dir;
                 Vector3 force = forceDirection * forceMagnitude;
                 rb.AddForceAtPosition(force, hit.point, ForceMode.Impulse);
             }
-            if (hit.collider.CompareTag("Barrel"))
-            {
-                BarrelExplode barrelExplode = hit.collider.GetComponent<BarrelExplode>();
-                if(barrelExplode != null)
-                {
-                    barrelExplode.Explode();
-                }
-            }
+            
         }
 
         if (currentAmmo > 0)

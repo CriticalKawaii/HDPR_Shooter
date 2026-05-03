@@ -3,9 +3,8 @@ using UnityEngine;
 public class BarrelExplode : MonoBehaviour
 {
     // Start is called once before the first execution of Update after the MonoBehaviour is created
-    private AudioSource audio;
-    public GameObject onShotEffect;
-    public GameObject barrel;
+    [SerializeField] GameObject onShotEffect;
+    [SerializeField] GameObject barrel;
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {

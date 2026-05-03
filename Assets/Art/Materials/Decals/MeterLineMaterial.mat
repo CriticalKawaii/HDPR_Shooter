@@ -224,7 +224,7 @@ Material:
     - _LinkDetailsWithBase: 1
     - _MaskBlendSrc: 1
     - _MaterialID: 1
-    - _Metallic: 0
+    - _Metallic: 1
     - _MetallicRemapMax: 1
     - _MetallicRemapMin: 0
     - _NormalBlendSrc: 0

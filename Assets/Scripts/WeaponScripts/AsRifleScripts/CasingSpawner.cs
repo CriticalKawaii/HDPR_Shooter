@@ -62,9 +62,6 @@ public class CasingSpawner : MonoBehaviour
         // Уничтожаем через заданное время
         Destroy(spawnedObject, lifeTime);
         
-        Debug.Log($"Префаб создан на позиции {spawnPosition}. " +
-                  $"Сила: {randomizedForce} (базовая: {impulseForce}), " +
-                  $"Направление: {worldDirection}");
     }
 
     // Перегруженный метод для спавна с задержкой

@@ -46,6 +46,7 @@ Material:
   - _DISPLACEMENT_LOCK_TILING_SCALE
   - _EMISSIVE_COLOR_MAP
   - _EMISSIVE_MAPPING_BASE
+  - _ENABLE_GEOMETRIC_SPECULAR_AA
   - _HEIGHTMAP
   - _MASKMAP
   - _NORMALMAP
@@ -257,19 +258,19 @@ Material:
     - _EmissiveIntensityUnit: 1
     - _EnableBlendModePreserveSpecularLighting: 1
     - _EnableFogOnTransparent: 1
-    - _EnableGeometricSpecularAA: 0
+    - _EnableGeometricSpecularAA: 1
     - _EnergyConservingSpecularColor: 1
     - _EnvironmentReflections: 1
     - _GlossMapScale: 0
     - _Glossiness: 0
     - _GlossyReflections: 0
-    - _HeightAmplitude: 0.099999994
+    - _HeightAmplitude: 0.08
     - _HeightCenter: 1
     - _HeightMapParametrization: 1
     - _HeightMax: 1
     - _HeightMin: -1
     - _HeightOffset: 0
-    - _HeightPoMAmplitude: 10
+    - _HeightPoMAmplitude: 8
     - _HeightTessAmplitude: 3.54
     - _HeightTessCenter: 0.5
     - _InvTilingScale: 4
@@ -288,8 +289,8 @@ Material:
     - _OcclusionStrength: 1
     - _OpaqueCullMode: 2
     - _PPDLodThreshold: 10
-    - _PPDMaxSamples: 64
-    - _PPDMinSamples: 64
+    - _PPDMaxSamples: 40
+    - _PPDMinSamples: 30
     - _PPDPrimitiveLength: 1
     - _PPDPrimitiveWidth: 1
     - _Parallax: 0.0087

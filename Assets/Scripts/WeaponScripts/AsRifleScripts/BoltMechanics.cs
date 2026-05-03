@@ -1,7 +1,12 @@
 using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
 
 public class BoltMechanics : MonoBehaviour
 {
+
+    private XRGrabInteractable grab;
     public ConfigurableJoint cfgjoint;
     public Transform trans;
     public Rigidbody rb;
@@ -63,14 +68,16 @@ public class BoltMechanics : MonoBehaviour
             }
         }
     }
-    public void Grabbed(){
+    public void Grabbed()
+    {
         Release = false;
         Based = false;
         isFreezed = false;
         GunAnim.enabled = false;
     }
-    public void Released(){
-        Release = true;
+    public void Released()
+    {
+        Release = true; 
     }
     public bool IsClosed()
     {
